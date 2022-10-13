@@ -46,4 +46,4 @@ with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
 r = math.ceil(math.sqrt(batch_size))
 c = math.ceil(batch_size / r)
 grid = image_grid(images, rows=r, cols=c)
-grid.save("astronaut_rides_horse-ipex-{}x{}.png".format(r, c))
+grid.save("astronaut_rides_horse-{}x{}.png".format(r, c))
