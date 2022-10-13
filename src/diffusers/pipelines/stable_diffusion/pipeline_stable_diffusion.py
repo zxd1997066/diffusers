@@ -313,7 +313,10 @@ class StableDiffusionPipeline(DiffusionPipeline):
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
             # predict the noise residual
-            noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+            traced_model = self.unet
+            traced_model = torch.jit.trace(traced_model, (latent_model_input, t, text_embeddings), check_trace=False, strict=False)
+            traced_model = torch.jit.freeze(traced_model)
+            noise_pred = traced_model(latent_model_input, t, encoder_hidden_states=text_embeddings)["sample"]
 
             # perform guidance
             if do_classifier_free_guidance:
