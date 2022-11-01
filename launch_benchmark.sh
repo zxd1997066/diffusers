@@ -9,7 +9,7 @@ function main {
     set_environment
 
     # requirements
-    pip install -U transfomers ftfy
+    pip install -U transformers ftfy
     python setup.py install
 
     # if multiple use 'xxx,xxx,xxx'
