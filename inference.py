@@ -28,6 +28,7 @@ print(args)
 
 seed = 666
 generator = torch.Generator(args.device).manual_seed(seed)
+prompt = args.prompt * args.batch_size
 
 if args.quantized_engine is not None:
     torch.backends.quantized.engine = args.quantized_engine
@@ -46,47 +47,6 @@ def image_grid(imgs, rows, cols):
         grid.paste(img, box=(i%cols*w, i//cols*h))
     return grid
 
-tic = time.time()
-if args.arch != 'CompVis/stable-diffusion-v1-4':
-    model = DDPMPipeline.from_pretrained(args.arch)
-else:
-    model = StableDiffusionPipeline.from_pretrained(args.arch, use_auth_token=True)
-model = model.to(args.device)
-print('weight load latency:', time.time() - tic)
-
-if args.precision == "bf16":
-    model = model.to(torch.bfloat16)
-    print("---- Use bf16 model.")
-if args.precision == "fp16":
-    model = model.half()
-    print("---- Use fp16 model.")
-if args.channels_last:
-    # model = model.to(memory_format=torch.channels_last)
-    model.unet = model.unet.to(memory_format=torch.channels_last)
-    if args.arch == 'CompVis/stable-diffusion-v1-4':
-        model.vae = model.vae.to(memory_format=torch.channels_last)
-        model.text_encoder = model.text_encoder.to(memory_format=torch.channels_last)
-        model.safety_checker = model.safety_checker.to(memory_format=torch.channels_last)
-    print("---- Use NHWC model.")
-
-prompt = args.prompt * args.batch_size
-
-if args.ipex:
-    import intel_extension_for_pytorch as ipex
-    print("---- Use IPEX")
-    if args.precision == "bfloat16":
-        model.unet = ipex.optimize(model.unet.eval(), dtype=torch.bfloat16, inplace=True)
-        if args.arch == 'CompVis/stable-diffusion-v1-4':
-            model.vae = ipex.optimize(model.vae.eval(), dtype=torch.bfloat16, inplace=True)
-            model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch.bfloat16, inplace=True)
-            model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch.bfloat16, inplace=True)
-    else:
-        model.unet = ipex.optimize(model.unet.eval(), dtype=torch.float32, inplace=True)
-        if args.arch == 'CompVis/stable-diffusion-v1-4':
-            model.vae = ipex.optimize(model.vae.eval(), dtype=torch.float32, inplace=True)
-            model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch.float32, inplace=True)
-            model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch.float32, inplace=True)
-
 def trace_handler(p):
     output = p.key_averages().table(sort_by="self_cpu_time_total")
     print(output)
@@ -101,20 +61,91 @@ def trace_handler(p):
                 'stable_diffusion-' + str(p.step_num) + '-' + str(os.getpid()) + '.json'
     p.export_chrome_trace(timeline_file)
 
-# compute
-total_time = 0.0
-total_sample = 0
-if args.profile:
-    with torch.profiler.profile(
-        activities=[torch.profiler.ProfilerActivity.CPU],
-        record_shapes=True,
-        schedule=torch.profiler.schedule(
-            wait=0,
-            warmup=1,
-            active=1,
-        ),
-        on_trace_ready=trace_handler,
-    ) as p:
+
+with torch.no_grad():
+    tic = time.time()
+    if args.arch != 'CompVis/stable-diffusion-v1-4':
+        model = DDPMPipeline.from_pretrained(args.arch)
+    else:
+        model = StableDiffusionPipeline.from_pretrained(args.arch, use_auth_token=True)
+    model = model.to(args.device)
+    print('weight load latency:', time.time() - tic)
+
+    if args.precision == "bf16":
+        model = model.to(torch.bfloat16)
+        print("---- Use bf16 model.")
+    if args.precision == "fp16":
+        model = model.half()
+        print("---- Use fp16 model.")
+    if args.channels_last:
+        # model = model.to(memory_format=torch.channels_last)
+        model.unet = model.unet.to(memory_format=torch.channels_last)
+        if args.arch == 'CompVis/stable-diffusion-v1-4':
+            model.vae = model.vae.to(memory_format=torch.channels_last)
+            model.text_encoder = model.text_encoder.to(memory_format=torch.channels_last)
+            model.safety_checker = model.safety_checker.to(memory_format=torch.channels_last)
+        print("---- Use NHWC model.")
+
+    if args.ipex:
+        import intel_extension_for_pytorch as ipex
+        print("---- Use IPEX")
+        if args.precision == "bfloat16":
+            model.unet = ipex.optimize(model.unet.eval(), dtype=torch.bfloat16, inplace=True)
+            if args.arch == 'CompVis/stable-diffusion-v1-4':
+                model.vae = ipex.optimize(model.vae.eval(), dtype=torch.bfloat16, inplace=True)
+                model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch.bfloat16, inplace=True)
+                model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch.bfloat16, inplace=True)
+        else:
+            model.unet = ipex.optimize(model.unet.eval(), dtype=torch.float32, inplace=True)
+            if args.arch == 'CompVis/stable-diffusion-v1-4':
+                model.vae = ipex.optimize(model.vae.eval(), dtype=torch.float32, inplace=True)
+                model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch.float32, inplace=True)
+                model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch.float32, inplace=True)
+
+
+    # compute
+    total_time = 0.0
+    total_sample = 0
+    if args.profile:
+        with torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU],
+            record_shapes=True,
+            schedule=torch.profiler.schedule(
+                wait=0,
+                warmup=1,
+                active=1,
+            ),
+            on_trace_ready=trace_handler,
+        ) as p:
+            for i in range(args.num_iter):
+                elapsed = time.time()
+
+                if args.precision == "bfloat16":
+                    print("---- Use autocast to bf16 model.")
+                    with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
+                        if args.arch != 'CompVis/stable-diffusion-v1-4':
+                            images = model(batch_size=args.batch_size, args=args).images[0]
+                        else:
+                            images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
+                elif args.precision == "float16":
+                    print("---- Use autocast to fp16 model.")
+                    with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
+                        if args.arch != 'CompVis/stable-diffusion-v1-4':
+                            images = model(batch_size=args.batch_size, args=args).images[0]
+                        else:
+                            images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
+                else:
+                    if args.arch != 'CompVis/stable-diffusion-v1-4':
+                        images = model(batch_size=args.batch_size, args=args).images[0]
+                    else:
+                        images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
+                p.step()
+                elapsed = time.time() - elapsed
+                print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
+                if i >= args.num_warmup:
+                    total_sample += args.batch_size
+                    total_time += elapsed
+    else:
         for i in range(args.num_iter):
             elapsed = time.time()
 
@@ -137,41 +168,12 @@ if args.profile:
                     images = model(batch_size=args.batch_size, args=args).images[0]
                 else:
                     images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
-            p.step()
+
             elapsed = time.time() - elapsed
             print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
             if i >= args.num_warmup:
                 total_sample += args.batch_size
                 total_time += elapsed
-else:
-    for i in range(args.num_iter):
-        elapsed = time.time()
-
-        if args.precision == "bfloat16":
-            print("---- Use autocast to bf16 model.")
-            with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
-                if args.arch != 'CompVis/stable-diffusion-v1-4':
-                    images = model(batch_size=args.batch_size, args=args).images[0]
-                else:
-                    images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
-        elif args.precision == "float16":
-            print("---- Use autocast to fp16 model.")
-            with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
-                if args.arch != 'CompVis/stable-diffusion-v1-4':
-                    images = model(batch_size=args.batch_size, args=args).images[0]
-                else:
-                    images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
-        else:
-            if args.arch != 'CompVis/stable-diffusion-v1-4':
-                images = model(batch_size=args.batch_size, args=args).images[0]
-            else:
-                images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
-
-        elapsed = time.time() - elapsed
-        print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
-        if i >= args.num_warmup:
-            total_sample += args.batch_size
-            total_time += elapsed
 
 latency = total_time / total_sample * 1000
 throughput = total_sample / total_time
