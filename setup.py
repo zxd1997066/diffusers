@@ -206,7 +206,7 @@ install_requires = [
     deps["regex"],
     deps["requests"],
     deps["Pillow"],
-    deps["transformers"],
+    deps["transformers==4.23.1"],
     deps["ftfy"],
 ]
 
