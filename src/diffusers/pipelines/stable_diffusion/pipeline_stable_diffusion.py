@@ -382,6 +382,7 @@ class StableDiffusionPipeline(DiffusionPipeline):
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: Optional[int] = 1,
+        args: Optional[dict] = None,
         **kwargs,
     ):
         r"""
@@ -482,7 +483,13 @@ class StableDiffusionPipeline(DiffusionPipeline):
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
             # predict the noise residual
-            noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+            if args.jit and i == 0:
+                traced_model = self.unet
+                traced_model = torch.jit.trace(traced_model, (latent_model_input, t, text_embeddings), check_trace=False, strict=False)
+                traced_model = torch.jit.freeze(traced_model)
+            elif not args.jit:
+                traced_model = self.unet
+            noise_pred = traced_model(latent_model_input, t, encoder_hidden_states=text_embeddings)["sample"]
 
             # perform guidance
             if do_classifier_free_guidance:

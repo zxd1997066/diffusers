@@ -46,6 +46,7 @@ class DDPMPipeline(DiffusionPipeline):
         num_inference_steps: int = 1000,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
+        args: dict = None,
         **kwargs,
     ) -> Union[ImagePipelineOutput, Tuple]:
         r"""
@@ -103,16 +104,23 @@ class DDPMPipeline(DiffusionPipeline):
             image = torch.randn(image_shape, generator=generator, device=self.device)
 
         # set step values
-        self.scheduler.set_timesteps(num_inference_steps)
+        self.scheduler.set_timesteps(args.num_inference_steps)
 
-        for t in self.progress_bar(self.scheduler.timesteps):
+        for i, t in enumerate(self.progress_bar(self.scheduler.timesteps)):
             # 1. predict noise model_output
-            model_output = self.unet(image, t).sample
+            # model_output = self.unet(image, t).sample
+            if args.jit and i == 0:
+                traced_model = self.unet
+                traced_model = torch.jit.trace(traced_model, (image, t), check_trace=False, strict=False)
+                traced_model = torch.jit.freeze(traced_model)
+            elif not args.jit:
+                traced_model = self.unet
+            model_output = traced_model(image, t)["sample"]
 
             # 2. compute previous image: x_t -> x_t-1
             image = self.scheduler.step(
                 model_output, t, image, generator=generator, predict_epsilon=predict_epsilon
-            ).prev_sample
+            )['prev_sample']
 
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.cpu().permute(0, 2, 3, 1).numpy()
