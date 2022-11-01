@@ -32,7 +32,8 @@ function main {
             num_inference_steps=50
         fi
         # cache
-        python inference.py ${model_arch} --num_inference_steps 1 \
+        python inference.py --device ${device} \
+            ${model_arch} --num_inference_steps 1 \
             --channels_last ${channels_last} \
             --num_iter 3 --num_warmup 1 \
             --precision=${precision} \
@@ -77,7 +78,8 @@ function generate_core {
             OOB_EXEC_HEADER=" CUDA_VISIBLE_DEVICES=${device_array[i]} "
         fi
         printf " ${OOB_EXEC_HEADER} \
-            python ./inference.py ${model_arch} --num_inference_steps $num_inference_steps \
+            python inference.py --device ${device} \
+                ${model_arch} --num_inference_steps $num_inference_steps \
                 --channels_last ${channels_last} \
                 --num_iter 3 --num_warmup 1 \
                 --precision=${precision} \
@@ -104,7 +106,8 @@ function generate_core_launcher {
                     --log_path ${log_dir} \
                     --ninstances ${#device_array[@]} \
                     --ncore_per_instance ${real_cores_per_instance} \
-            ./inference.py ${model_arch} --num_inference_steps $num_inference_steps \
+            inference.py --device ${device} \
+                ${model_arch} --num_inference_steps $num_inference_steps \
                 --channels_last ${channels_last} \
                 --num_iter 3 --num_warmup 1 \
                 --precision=${precision} \
