@@ -9,6 +9,7 @@ function main {
     set_environment
 
     # requirements
+    pip uninstall -y transformers tokenizers
     pip install -U transformers ftfy
     python setup.py install
 
