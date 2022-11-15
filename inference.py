@@ -140,6 +140,7 @@ with torch.no_grad():
                         images = model(batch_size=args.batch_size, args=args).images[0]
                     else:
                         images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
+                if torch.cuda.is_available(): torch.cuda.synchronize()
                 p.step()
                 elapsed = time.time() - elapsed
                 print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
@@ -170,6 +171,7 @@ with torch.no_grad():
                 else:
                     images = model(prompt, guidance_scale=7.5, num_inference_steps=args.num_inference_steps, generator=generator, args=args)["images"]
 
+            if torch.cuda.is_available(): torch.cuda.synchronize()
             elapsed = time.time() - elapsed
             print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
             if i >= args.num_warmup:
