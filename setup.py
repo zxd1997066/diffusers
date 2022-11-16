@@ -207,7 +207,6 @@ install_requires = [
     deps["requests"],
     deps["Pillow"],
     deps["accelerate"],
-    deps["ftfy"],
 ]
 
 setup(
