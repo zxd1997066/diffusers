@@ -56,6 +56,8 @@ def test(args, model, prompt):
                 torch.save(prof.table(sort_by="id", row_limit=100000),
                     timeline_dir+'profile_detail_withId.pt')
                 prof.export_chrome_trace(timeline_dir+"stable-diffusion.json")
+            if args.jit and i == 0:
+                args.jit = False
     elif args.profile and args.device != "xpu":
         if torch.cuda.is_available():
             prof_act = [torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
@@ -84,6 +86,8 @@ def test(args, model, prompt):
                 if i >= args.num_warmup:
                     total_time += elapsed
                     total_sample += 1
+                if args.jit and i == 0:
+                    args.jit = False
     else:
         for i in range(args.num_iter):
             elapsed = time.time()
