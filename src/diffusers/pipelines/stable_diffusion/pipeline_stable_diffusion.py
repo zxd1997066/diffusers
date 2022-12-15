@@ -481,6 +481,8 @@ class StableDiffusionPipeline(DiffusionPipeline):
             # expand the latents if we are doing classifier free guidance
             latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+            if args.channels_last:
+                latent_model_input = latent_model_input.contiguous(memory_format=torch.channels_last)
 
             # predict the noise residual
             if args.jit and i == 0:

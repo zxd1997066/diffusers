@@ -27,7 +27,36 @@ def image_grid(imgs, rows, cols):
 def test(args, model, prompt):
     total_sample = 0
     total_time = 0.0
-    if args.profile:
+    if args.profile and args.device == "xpu":
+        for i in range(args.num_iter):
+            elapsed = time.time()
+            with torch.autograd.profiler_legacy.profile(enabled=args.profile, use_xpu=True, record_shapes=False) as prof:
+                if args.model_type == 'stable-diffusion':
+                    images = model(prompt, num_inference_steps=args.num_inference_steps, args=args)["images"]
+                else:
+                    images = model(batch_size=args.per_device_eval_batch_size, args=args).images[0]
+                torch.xpu.synchronize()
+            elapsed = time.time() - elapsed
+            print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
+            if i >= args.num_warmup:
+                total_time += elapsed
+                total_sample += 1
+            if args.profile and i == int(args.num_iter / 2):
+                import pathlib
+                timeline_dir = str(pathlib.Path.cwd()) + '/timeline/'
+                if not os.path.exists(timeline_dir):
+                    try:
+                        os.makedirs(timeline_dir)
+                    except:
+                        pass
+                torch.save(prof.key_averages().table(sort_by="self_xpu_time_total"),
+                    timeline_dir+'profile.pt')
+                torch.save(prof.key_averages(group_by_input_shape=True).table(),
+                    timeline_dir+'profile_detail.pt')
+                torch.save(prof.table(sort_by="id", row_limit=100000),
+                    timeline_dir+'profile_detail_withId.pt')
+                prof.export_chrome_trace(timeline_dir+"stable-diffusion.json")
+    elif args.profile and args.device != "xpu":
         if torch.cuda.is_available():
             prof_act = [torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
         else:
@@ -68,6 +97,8 @@ def test(args, model, prompt):
             if i >= args.num_warmup:
                 total_time += elapsed
                 total_sample += 1
+            if args.jit and i == 0:
+                args.jit = False
 
     print("\n", "-"*20, "Summary", "-"*20)
     latency = total_time / total_sample * 1000
@@ -116,7 +147,6 @@ if __name__ == '__main__':
     parser.add_argument('--save_image', action='store_true', default=False, help='save image')
     parser.add_argument('--image_rows', default=1, type=int, help='saved image array')
     #
-    parser.add_argument('--ipex', action='store_true', default=False, help='enable ipex')
     parser.add_argument('--jit', action='store_true', default=False, help='enable JIT')
     #
     parser.add_argument('--do_eval', action='store_true', default=False, help='useless')
@@ -125,12 +155,14 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print(args)
 
+    if args.device == 'cuda':
+        torch.backends.cuda.matmul.allow_tf32 = False
+    elif args.device == "xpu":
+        import intel_extension_for_pytorch
     # Intialize
     model_class = MODEL_CLASSES[args.model_type]
-    model = model_class.from_pretrained(args.model_name_or_path)
+    model = model_class.from_pretrained(args.model_name_or_path).to(args.device)
     prompt = args.prompt * args.per_device_eval_batch_size
-    if args.device == 'cuda':
-        model = model.to("cuda")
     if args.channels_last:
         # model = model.to(memory_format=torch.channels_last)
         model.unet = model.unet.to(memory_format=torch.channels_last)
@@ -139,30 +171,25 @@ if __name__ == '__main__':
             model.text_encoder = model.text_encoder.to(memory_format=torch.channels_last)
             model.safety_checker = model.safety_checker.to(memory_format=torch.channels_last)
         print("---- Use NHWC model.")
-    if args.ipex:
-        import intel_extension_for_pytorch as ipex
-        print("---- Use IPEX")
-        if args.precision == "bfloat16":
-            model.unet = ipex.optimize(model.unet.eval(), dtype=torch.bfloat16, inplace=True)
-            if args.model_type == 'stable-diffusion':
-                model.vae = ipex.optimize(model.vae.eval(), dtype=torch.bfloat16, inplace=True)
-                model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch.bfloat16, inplace=True)
-                model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch.bfloat16, inplace=True)
-        else:
-            model.unet = ipex.optimize(model.unet.eval(), dtype=torch.float32, inplace=True)
-            if args.model_type == 'stable-diffusion':
-                model.vae = ipex.optimize(model.vae.eval(), dtype=torch.float32, inplace=True)
-                model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch.float32, inplace=True)
-                model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch.float32, inplace=True)
+
+    datatype = torch.float16 if args.precision == "float16" else torch.bfloat16 if args.precision == "bfloat16" else torch.float32
+    if args.device == "xpu":
+        model.unet = torch.xpu.optimize(model.unet.eval(), dtype=datatype, inplace=True)
+        if args.model_type == 'stable-diffusion':
+            model.vae = torch.xpu.optimize(model.vae.eval(), dtype=datatype, inplace=True)
+            model.text_encoder = torch.xpu.optimize(model.text_encoder.eval(), dtype=datatype, inplace=True)
+            model.safety_checker = torch.xpu.optimize(model.safety_checker.eval(), dtype=datatype, inplace=True)
 
     # start test
-    if args.precision == "bfloat16":
-        print("---- Use AMP bfloat16")
-        with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
+    print("---- {} Use AMP {}".format(args.device, args.precision))
+    if args.device == "cpu" and args.precision != "float32":
+        with torch.cpu.amp.autocast(enabled=True, dtype=datatype):
             test(args, model, prompt)
-    elif args.precision == "float16":
-        print("---- Use AMP float16")
-        with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
+    elif args.device == "xpu" and args.precision != "float32":
+        with torch.xpu.amp.autocast(enabled=True, dtype=datatype):
+            test(args, model, prompt)
+    elif args.device == "cuda" and args.precision != "float32":
+        with torch.cuda.amp.autocast(enabled=True, dtype=datatype):
             test(args, model, prompt)
     else:
         test(args, model, prompt)
