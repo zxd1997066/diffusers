@@ -36,7 +36,7 @@ def test(args, model, prompt):
             activities=prof_act,
             record_shapes=True,
             schedule=torch.profiler.schedule(
-                wait=int(args.num_iter/2),
+                wait=0,
                 warmup=2,
                 active=1,
             ),
