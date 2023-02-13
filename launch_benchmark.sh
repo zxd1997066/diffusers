@@ -10,7 +10,7 @@ function main {
 
     # requirements
     pip uninstall -y transformers tokenizers
-    pip install -U transformers ftfy
+    pip install -U transformers accelerate
     python setup.py install
 
     # if multiple use 'xxx,xxx,xxx'
