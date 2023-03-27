@@ -22,26 +22,23 @@ function main {
     do
         if [ "${model_name}" == "jmamou-ddpm-ema-flowers-64-distil-2layers" ];then
             model_arch=' --model_name_or_path jmamou/ddpm-ema-flowers-64-distil-2layers --model_type ddpm '
-            num_inference_steps=1000
         elif [ "${model_name}" == "jmamou-ddpm-ema-flowers-64-distil-4layers" ];then
             model_arch=' --model_name_or_path jmamou/ddpm-ema-flowers-64-distil-4layers --model_type ddpm '
-            num_inference_steps=1000
         elif [ "${model_name}" == "anton-l-ddpm-ema-flowers-64" ];then
             model_arch=' --model_name_or_path anton-l/ddpm-ema-flowers-64 --model_type ddpm '
-            num_inference_steps=1000
         elif [ "${model_name}" == "CompVis-stable-diffusion-v1-4" ];then
-            model_arch=' --model_name_or_path CompVis/stable-diffusion-v1-4 --model_type stable-diffusion '
-            num_inference_steps=50
+            model_arch=' --model_name_or_path CompVis/stable-diffusion-v1-4 '
         elif [ "${model_name}" == "runwayml-stable-diffusion-v1-5" ];then
-            model_arch=' --model_name_or_path runwayml/stable-diffusion-v1-5 --model_type stable-diffusion '
-            num_inference_steps=50
+            model_arch=' --model_name_or_path runwayml/stable-diffusion-v1-5 '
+        elif [ "${model_name}" == "stabilityai-stable-diffusion-2-1" ];then
+            model_arch=' --model_name_or_path stabilityai/stable-diffusion-2-1 --dpm_solver '
         else
             echo "[Error] Not enable such model: $model_name"
             exit 1
         fi
         # cache
         python inference.py --device ${device} \
-            ${model_arch} --num_inference_steps 1 \
+            ${model_arch} \
             --channels_last ${channels_last} \
             --num_iter 3 --num_warmup 1 \
             --precision=${precision} \
@@ -87,9 +84,8 @@ function generate_core {
         fi
         printf " ${OOB_EXEC_HEADER} \
             python inference.py --device ${device} \
-                ${model_arch} --num_inference_steps $num_inference_steps \
+                ${model_arch} \
                 --channels_last ${channels_last} \
-                --num_iter 3 --num_warmup 1 \
                 --precision=${precision} \
                 --per_device_eval_batch_size ${batch_size} \
                 ${addtion_options} \
@@ -115,9 +111,8 @@ function generate_core_launcher {
                     --ninstances ${#device_array[@]} \
                     --ncore_per_instance ${real_cores_per_instance} \
             inference.py --device ${device} \
-                ${model_arch} --num_inference_steps $num_inference_steps \
+                ${model_arch} \
                 --channels_last ${channels_last} \
-                --num_iter 3 --num_warmup 1 \
                 --precision=${precision} \
                 --per_device_eval_batch_size ${batch_size} \
                 ${addtion_options} \

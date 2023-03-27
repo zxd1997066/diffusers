@@ -25,8 +25,9 @@ def image_grid(imgs, rows, cols):
     return grid
 
 def test(args, model, prompt):
-    total_sample = 0
     total_time = 0.0
+    num_iter = 5
+    num_warmup = 2
     if args.profile:
         if torch.cuda.is_available():
             prof_act = [torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA]
@@ -36,43 +37,40 @@ def test(args, model, prompt):
             activities=prof_act,
             record_shapes=True,
             schedule=torch.profiler.schedule(
-                wait=0,
+                wait=1,
                 warmup=2,
                 active=1,
             ),
             on_trace_ready=trace_handler,
         ) as p:
-            for i in range(args.num_iter):
+            for i in range(num_iter):
                 elapsed = time.time()
                 if args.model_type == 'stable-diffusion':
-                    image = model(prompt, num_inference_steps=args.num_inference_steps).images[0]
+                    image = model(prompt).images[0]
                 else:
                     image = model(batch_size=args.per_device_eval_batch_size).images[0]
                 if torch.cuda.is_available(): torch.cuda.synchronize()
                 p.step()
                 elapsed = time.time() - elapsed
                 print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
-                if i >= args.num_warmup:
+                if i >= num_warmup:
                     total_time += elapsed
-                    total_sample += 1
     else:
-        for i in range(args.num_iter):
+        for i in range(num_iter):
             elapsed = time.time()
             if args.model_type == 'stable-diffusion':
-                image = model(prompt, num_inference_steps=args.num_inference_steps).images[0]
+                image = model(prompt).images[0]
             else:
                 image = model(batch_size=args.per_device_eval_batch_size).images[0]
             if torch.cuda.is_available(): torch.cuda.synchronize()
             elapsed = time.time() - elapsed
             print("Iteration: {}, inference time: {} sec.".format(i, elapsed), flush=True)
-            if i >= args.num_warmup:
+            if i >= num_warmup:
                 total_time += elapsed
-                total_sample += 1
 
-    print("\n", "-"*20, "Summary", "-"*20)
-    latency = total_time / total_sample * 1000
-    throughput = total_sample / total_time
-    print("inference Latency: {} ms".format(latency))
+    latency = total_time / (num_iter - num_warmup)
+    throughput = (num_iter - num_warmup) / total_time
+    print("inference Latency: {} sec".format(latency))
     print("inference Throughput: {} samples/s".format(throughput))
 
     # save image
@@ -103,16 +101,16 @@ if __name__ == '__main__':
     #
     parser = argparse.ArgumentParser(description='PyTorch Inference')
     parser.add_argument("--model_name_or_path", type=str, default='CompVis/stable-diffusion-v1-4', help="model name")
-    parser.add_argument("--model_type", type=str, default='', help="model_type")
-    parser.add_argument('--prompt', default=["a photo of an astronaut riding a horse on mars"], type=list, help='prompt')
-    parser.add_argument('--device', default="cpu", type=str, help='cpu, cuda or xpu')
+    parser.add_argument("--model_type", type=str, default='stable-diffusion', help="model_type")
+    parser.add_argument('--prompt', default="a photo of an astronaut riding a horse on mars", type=str, help='input prompt')
+    parser.add_argument('--device', default="cpu", type=str, help='cpu, cuda')
     parser.add_argument('--precision', default="float32", type=str, help='precision')
     parser.add_argument('--channels_last', default=1, type=int, help='Use NHWC or not')
     parser.add_argument('--profile', action='store_true', default=False, help='collect timeline')
     parser.add_argument('--num_iter', default=1, type=int, help='test iterations')
     parser.add_argument('--num_warmup', default=0, type=int, help='test warmup')
     parser.add_argument('--per_device_eval_batch_size', default=1, type=int, help='per_device_eval_batch_size')
-    parser.add_argument('--num_inference_steps', default=50, type=int, help='num_inference_steps')
+    # parser.add_argument('--num_inference_steps', default=50, type=int, help='num_inference_steps')
     parser.add_argument('--save_image', action='store_true', default=False, help='save image')
     parser.add_argument('--image_rows', default=1, type=int, help='saved image array')
     #
@@ -126,52 +124,57 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print(args)
 
+    # device
+    device = torch.device(args.device)
+
+    # dtype
+    if args.precision == "bfloat16":
+        torch_dtype = torch.bfloat16
+        amp_enabled = True
+    elif args.precision == "float16":
+        torch_dtype = torch.float16
+        amp_enabled = True
+    else:
+        torch_dtype = torch.float32
+        amp_enabled = False
+
     # Intialize
     model_class = MODEL_CLASSES[args.model_type]
+    model = model_class.from_pretrained(args.model_name_or_path, torch_dtype=torch_dtype)
     if args.dpm_solver:
         from diffusers import DPMSolverMultistepScheduler
-        dpm = DPMSolverMultistepScheduler.from_pretrained(args.model_name_or_path, subfolder="scheduler")
-        model = model_class.from_pretrained(args.model_name_or_path, scheduler=dpm, torch_dtype=torch.float)
-        args.num_inference_steps = 20
+        # dpm = DPMSolverMultistepScheduler.from_pretrained(args.model_name_or_path, subfolder="scheduler")
+        model.scheduler = DPMSolverMultistepScheduler.from_config(model.scheduler.config)
         print("---- Use DPM solver.")
-    else:
-        model = model_class.from_pretrained(args.model_name_or_path)
-    prompt = args.prompt * args.per_device_eval_batch_size
-    if args.device == 'cuda':
-        model = model.to("cuda")
+
+    model = model.to(device)
+
     if args.channels_last:
         # model = model.to(memory_format=torch.channels_last)
         model.unet = model.unet.to(memory_format=torch.channels_last)
         if args.model_type == 'stable-diffusion':
             model.vae = model.vae.to(memory_format=torch.channels_last)
             model.text_encoder = model.text_encoder.to(memory_format=torch.channels_last)
-            model.safety_checker = model.safety_checker.to(memory_format=torch.channels_last)
+            # model.safety_checker = model.safety_checker.to(memory_format=torch.channels_last)
         print("---- Use NHWC model.")
     if args.ipex:
         import intel_extension_for_pytorch as ipex
         print("---- Use IPEX")
-        if args.precision == "bfloat16":
-            model.unet = ipex.optimize(model.unet.eval(), dtype=torch.bfloat16, inplace=True)
-            if args.model_type == 'stable-diffusion':
-                model.vae = ipex.optimize(model.vae.eval(), dtype=torch.bfloat16, inplace=True)
-                model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch.bfloat16, inplace=True)
-                model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch.bfloat16, inplace=True)
-        else:
-            model.unet = ipex.optimize(model.unet.eval(), dtype=torch.float32, inplace=True)
-            if args.model_type == 'stable-diffusion':
-                model.vae = ipex.optimize(model.vae.eval(), dtype=torch.float32, inplace=True)
-                model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch.float32, inplace=True)
-                model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch.float32, inplace=True)
+        sample = torch.randn(2,4,64,64)
+        timestep = torch.rand(1)*999
+        encoder_hidden_status = torch.randn(2,77,768)
+        input_example = (sample, timestep, encoder_hidden_status)
+        model.unet = ipex.optimize(model.unet.eval(), dtype=torch_dtype, inplace=True, sample_input=input_example)
+        if args.model_type == 'stable-diffusion':
+            model.vae = ipex.optimize(model.vae.eval(), dtype=torch_dtype, inplace=True)
+            model.text_encoder = ipex.optimize(model.text_encoder.eval(), dtype=torch_dtype, inplace=True)
+            # model.safety_checker = ipex.optimize(model.safety_checker.eval(), dtype=torch_dtype, inplace=True)
+
+    # prompt
+    prompt = [args.prompt] * args.per_device_eval_batch_size
 
     # start test
-    if args.precision == "bfloat16":
-        print("---- Use AMP bfloat16")
-        with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16):
-            test(args, model, prompt)
-    elif args.precision == "float16":
-        print("---- Use AMP float16")
-        with torch.cuda.amp.autocast(enabled=True, dtype=torch.float16):
-            test(args, model, prompt)
-    else:
+    print(amp_enabled)
+    with torch.autocast(args.device, enabled=amp_enabled, dtype=torch_dtype if amp_enabled else None):
         test(args, model, prompt)
 
