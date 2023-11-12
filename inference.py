@@ -121,6 +121,10 @@ if __name__ == '__main__':
     parser.add_argument('--do_eval', action='store_true', default=False, help='useless')
     parser.add_argument('--overwrite_output_dir', action='store_true', default=False, help='useless')
     parser.add_argument('--output_dir', default='', type=str, help='useless')
+    parser.add_argument("--compile", action='store_true', default=False,
+                    help="enable torch.compile")
+    parser.add_argument("--backend", type=str, default='inductor',
+                    help="enable torch.compile backend")
     args = parser.parse_args()
     print(args)
 
@@ -148,6 +152,8 @@ if __name__ == '__main__':
         print("---- Use DPM solver.")
 
     model = model.to(device)
+    if args.compile:
+        model = torch.compile(model, backend=args.backend, options={"freezing": True})
 
     if args.channels_last:
         # model = model.to(memory_format=torch.channels_last)
