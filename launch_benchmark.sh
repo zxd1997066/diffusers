@@ -38,7 +38,7 @@ function main {
         fi
         # cache
         if [ $batch_size -le 0 ];then
-            batch_size=32
+            batch_size=1
         fi
         python inference.py --device ${device} \
             ${model_arch} \
@@ -51,7 +51,7 @@ function main {
         for batch_size in ${batch_size_list[@]}
         do
             if [ $batch_size -le 0 ];then
-                batch_size=1
+                batch_size=32
             fi
             # clean workspace
             logs_path_clean
