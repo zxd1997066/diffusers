@@ -37,6 +37,9 @@ function main {
             exit 1
         fi
         # cache
+        if [ $batch_size -le 0 ];then
+            batch_size=1
+        fi
         python inference.py --device ${device} \
             ${model_arch} \
             --channels_last ${channels_last} \
