@@ -52,6 +52,7 @@ function main {
             fi
             # clean workspace
             logs_path_clean
+            echo ${batch_size}
             # generate launch script for multiple instance
             if [ "${OOB_USE_LAUNCHER}" == "1" ] && [ "${device}" != "cuda" ];then
                 generate_core_launcher
