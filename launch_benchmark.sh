@@ -38,7 +38,7 @@ function main {
         fi
         # cache
         if [ $batch_size -le 0 ];then
-            batch_size=1
+            batch_size=32
         fi
         python inference.py --device ${device} \
             ${model_arch} \
