@@ -10,6 +10,9 @@ function main {
 
     # requirements
     pip uninstall -y transformers tokenizers
+    if [ "${device}" == "cuda"];then
+        pip uninstall -y transformer-engine
+    fi
     pip install -U transformers accelerate
     python setup.py install
 
